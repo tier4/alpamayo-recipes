@@ -473,9 +473,9 @@ class TrainableReasoningVLA(ReasoningVLA, TrajectoryFusionWithFutureMixin):
             nj=num_traj_samples,
         )
 
-        # return additional information
         if kwargs.get("return_extra", False):
-            extra = extract_text_tokens(self.tokenizer, generated_tokens)
+            # Use full sequence so special tokens spanning input and generated parts are found
+            extra = extract_text_tokens(self.tokenizer, generated.sequences)
             # rearrange text tokens to shape [B, ns, nj] to match trajectory shape
             for text_tokens in extra.keys():
                 extra[text_tokens] = np.array(extra[text_tokens]).reshape(

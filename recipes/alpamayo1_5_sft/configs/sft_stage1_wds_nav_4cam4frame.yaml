@@ -1,0 +1,70 @@
+defaults:
+  - sft_base
+  - /models/ar1_5_base@model
+  # - /wandb: default  # uncomment to enable W&B logging (also set trainer.report_to below)
+  - override /vla_processor@data.train_dataset.vla_preprocess_args: nav
+  - override /vla_processor@data.val_dataset.vla_preprocess_args: nav
+  - _self_
+
+# WDS training config matching the physical_ai_av dataset default setup:
+#   4 cameras  × 4 temporal frames (t0-0.3s, t0-0.2s, t0-0.1s, t0)
+#
+# Camera coverage (PAI index → WDS name):
+#   0  CAM_FRONT_LEFT  — camera_cross_left_120fov
+#   1  CAM_FRONT_WIDE  — camera_front_wide_120fov
+#   2  CAM_FRONT_RIGHT — camera_cross_right_120fov
+#   6  CAM_FRONT       — camera_front_tele_30fov
+
+data:
+  train_dataset:
+    _target_: alpamayo.data.wds_nav.WDSNavDataset
+    _recursive_: false
+    tar_root: ${oc.env:WDS_TAR_ROOT,/mnt/storage_rdma/datasets/tier4/e2e}
+    labels_root: ${oc.env:WDS_LABELS_ROOT,${oc.env:HOME}/alpamayo_labels}
+    dates: null   # null = all available dates (~3,003 train samples)
+    cameras:
+      - CAM_FRONT_LEFT    # PAI index 0
+      - CAM_FRONT_WIDE    # PAI index 1
+      - CAM_FRONT_RIGHT   # PAI index 2
+      - CAM_FRONT         # PAI index 6
+    num_image_frames: 4   # [t0-0.3s, t0-0.2s, t0-0.1s, t0] at 10 Hz
+    local_dir: ""         # unused by WDSNavDataset; satisfies sft_base.yaml mandatory field
+    vla_preprocess_args:
+      generation_mode: false
+
+  val_dataset:
+    _target_: alpamayo.data.wds_nav.WDSNavDataset
+    _recursive_: false
+    tar_root: ${oc.env:WDS_TAR_ROOT,/mnt/storage_rdma/datasets/tier4/e2e}
+    labels_root: ${oc.env:WDS_LABELS_ROOT,${oc.env:HOME}/alpamayo_labels}
+    dates:
+      - "2026-01-07"   # last collected date as held-out validation (~446 samples)
+    cameras:
+      - CAM_FRONT_LEFT
+      - CAM_FRONT_WIDE
+      - CAM_FRONT_RIGHT
+      - CAM_FRONT
+    num_image_frames: 4
+    local_dir: ""
+    vla_preprocess_args:
+      generation_mode: true
+
+trainer:
+  lr_multiplier:
+    vlm.model.visual: 0.1
+  ddp_find_unused_parameters: false
+  gradient_accumulation_steps: 4
+  learning_rate: 1e-5
+  warmup_steps: 500
+  num_train_epochs: 50
+  # report_to: wandb  # uncomment together with /wandb: default above
+  # Each sample decodes 4 cameras x 4 frames = 16 JPEGs + zstd trajectory on CPU;
+  # the base config's dataloader_num_workers=2 starves the GPUs waiting on data.
+  dataloader_num_workers: 16
+  dataloader_prefetch_factor: 4
+  dataloader_persistent_workers: true
+paths:
+  output_dir: output_stage1_wds_nav_4cam4frame
+evaluate:
+  eval_ckpt: null
+task_name: alpamayo_1_5_sft_stage1_wds_nav_4cam4frame

@@ -1,0 +1,63 @@
+defaults:
+  - sft_base
+  - /models/ar1_5_base@model
+  # - /wandb: default  # uncomment to enable W&B logging (also set trainer.report_to below)
+  - override /vla_processor@data.train_dataset.vla_preprocess_args: nav_coc
+  - override /vla_processor@data.val_dataset.vla_preprocess_args: nav_coc
+  - _self_
+
+# Stage-1 with CoC (Chain of Thought) supervision.
+# Same as sft_stage1_wds_nav_4cam4frame but with cot in components_order
+# and label_components, so the VLM learns to generate CoC text + trajectory.
+
+data:
+  train_dataset:
+    _target_: alpamayo.data.wds_nav.WDSNavDataset
+    _recursive_: false
+    tar_root: ${oc.env:WDS_TAR_ROOT,/mnt/storage_rdma/datasets/tier4/e2e}
+    labels_root: ${oc.env:WDS_LABELS_ROOT,${oc.env:HOME}/alpamayo_labels}
+    dates: null
+    cameras:
+      - CAM_FRONT_LEFT
+      - CAM_FRONT_WIDE
+      - CAM_FRONT_RIGHT
+      - CAM_FRONT
+    num_image_frames: 4
+    local_dir: ""
+    vla_preprocess_args:
+      generation_mode: false
+
+  val_dataset:
+    _target_: alpamayo.data.wds_nav.WDSNavDataset
+    _recursive_: false
+    tar_root: ${oc.env:WDS_TAR_ROOT,/mnt/storage_rdma/datasets/tier4/e2e}
+    labels_root: ${oc.env:WDS_LABELS_ROOT,${oc.env:HOME}/alpamayo_labels}
+    dates:
+      - "2026-01-07"
+    cameras:
+      - CAM_FRONT_LEFT
+      - CAM_FRONT_WIDE
+      - CAM_FRONT_RIGHT
+      - CAM_FRONT
+    num_image_frames: 4
+    local_dir: ""
+    vla_preprocess_args:
+      generation_mode: true
+
+trainer:
+  lr_multiplier:
+    vlm.model.visual: 0.1
+  ddp_find_unused_parameters: false
+  gradient_accumulation_steps: 4
+  learning_rate: 1e-5
+  warmup_steps: 500
+  num_train_epochs: 50
+  # report_to: wandb  # uncomment together with /wandb: default above
+  dataloader_num_workers: 16
+  dataloader_prefetch_factor: 4
+  dataloader_persistent_workers: true
+paths:
+  output_dir: output_stage1_wds_nav_4cam4frame_coc
+evaluate:
+  eval_ckpt: null
+task_name: alpamayo_1_5_sft_stage1_wds_nav_4cam4frame_coc

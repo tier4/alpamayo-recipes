@@ -60,6 +60,45 @@ def project_waypoints_ftheta(wp, cam_rot, cam_t, intr):
     return projected[valid]
 
 
+def project_waypoints_pinhole(
+    wp: np.ndarray,
+    cam_extr: np.ndarray,
+    cam_intr: np.ndarray,
+    img_hw: tuple[int, int] | None = None,
+) -> np.ndarray:
+    """Project 3D waypoints onto 2D using a pinhole camera model.
+
+    Args:
+        wp: (N, 3) 3D waypoints in the vehicle/ego-local frame.
+        cam_extr: (4, 4) camera-to-vehicle SE(3) transform (T_vehicle_camera).
+        cam_intr: (3, 3) camera intrinsic K matrix.
+        img_hw: Optional (height, width) to filter out-of-bounds points.
+
+    Returns:
+        (M, 2) projected pixel coordinates for points in front of the camera.
+    """
+    T_cam_veh = np.linalg.inv(cam_extr)
+    R = T_cam_veh[:3, :3]
+    t = T_cam_veh[:3, 3]
+    cam_pts = (R @ wp.T).T + t  # (N, 3) in camera frame
+
+    z = cam_pts[:, 2]
+    valid = z > 0.1
+    if not np.any(valid):
+        return np.empty((0, 2), dtype=np.float64)
+
+    pts = cam_pts[valid]
+    uv = (cam_intr @ pts.T).T  # (M, 3)
+    uv = uv[:, :2] / uv[:, 2:3]
+
+    if img_hw is not None:
+        h, w = img_hw
+        in_bounds = (uv[:, 0] >= 0) & (uv[:, 0] < w) & (uv[:, 1] >= 0) & (uv[:, 1] < h)
+        uv = uv[in_bounds]
+
+    return uv
+
+
 def viz_waypoints_pai(
     intr_df: pd.DataFrame,
     extr_df: pd.DataFrame,

@@ -6,4 +6,8 @@ dist/
 outputs/*
 *.egg-info
 output_stage*
-*.egg-info
+
+*outputs/
+.env
+*.png
+recipes/alpamayo1_5_sft/docs/

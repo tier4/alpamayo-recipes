@@ -200,6 +200,93 @@ Note that `trainer.deepspeed` is passed as an absolute path because Hydra may ch
 Because LingoQA was included in training for the released Alpamayo 1.5 model, the loss should remain low and stable.
 ![loss](./loss_A1-5_lingoqa.png)
 
+## Train with WebDataset Navigation
+
+This recipe variant trains navigation-conditioned trajectory prediction using locally stored WebDataset tar archives and pre-generated navigation labels, instead of the PAI dataset. No dataset download step is required — all data is on local storage.
+
+### Data layout
+
+| Path | Contents |
+|------|----------|
+| `$WDS_TAR_ROOT/{date}/scene-XXXXXX.tar` | Camera frames + trajectory (per scene) |
+| `$WDS_TAR_ROOT/{date}/scene-XXXXXX.tar.idx` | JSON byte-offset index for random access |
+| `$WDS_LABELS_ROOT/{date}/keyframes/segments_relative_timestamp_sampled.json` | Keyframe index (clip_id + event_start_frame per meta-action) |
+| `$WDS_LABELS_ROOT/{date}/labels/{clip_id}/label_{frame}.yaml` | Labels (navigation_text, meta_action, effect_on_ego_behavior) |
+| `$WDS_LABELS_ROOT/{date}/coc_labels/{clip_id}/cot_{ts}.yaml` | Chain-of-thought labels |
+
+Ten dates are available (2025-11-19 through 2026-01-07), totalling ~3,449 labeled keyframes. Samples without a matching navigation label are silently skipped.
+
+### Run training
+
+```bash
+cd $YOUR_HOME/alpamayo-recipes/recipes/alpamayo1_5_sft
+torchrun --nproc_per_node 8 -m alpamayo1_5_sft.train_hf \
+  --config-path pkg://alpamayo1_5_sft/configs \
+  --config-name sft_stage1_wds_nav_4cam4frame \
+  model.checkpoint_path=/path/to/Alpamayo-1.5-10B-A1-format
+```
+
+By default the config trains on all available dates and uses `2026-01-07` as the validation set.
+
+### Override dates or cameras
+
+```bash
+# Single-date smoke test (fast iteration)
+torchrun --nproc_per_node 1 -m alpamayo1_5_sft.train_hf \
+  --config-path pkg://alpamayo1_5_sft/configs \
+  --config-name sft_stage1_wds_nav_4cam4frame \
+  model.checkpoint_path=/path/to/checkpoint \
+  "data.train_dataset.dates=[\"2025-11-19\"]" \
+  "data.val_dataset.dates=[\"2025-11-19\"]" \
+  trainer.max_steps=10
+
+# Multi-camera (front-wide + front-left + front-right)
+torchrun --nproc_per_node 8 -m alpamayo1_5_sft.train_hf \
+  --config-path pkg://alpamayo1_5_sft/configs \
+  --config-name sft_stage1_wds_nav_4cam4frame \
+  model.checkpoint_path=/path/to/checkpoint \
+  "data.train_dataset.cameras=[CAM_FRONT_WIDE,CAM_FRONT_LEFT,CAM_FRONT_RIGHT]" \
+  "data.val_dataset.cameras=[CAM_FRONT_WIDE,CAM_FRONT_LEFT,CAM_FRONT_RIGHT]"
+```
+
+Available camera names: `CAM_FRONT_WIDE` (PAI index 1), `CAM_FRONT` (index 6), `CAM_FRONT_LEFT` (index 0), `CAM_FRONT_RIGHT` (index 2).
+
+### Full-data 4-camera x 4-frame training
+
+[configs/sft_stage1_wds_nav_4cam4frame.yaml](./configs/sft_stage1_wds_nav_4cam4frame.yaml) matches the
+physical_ai_av dataset's default camera/frame setup (4 cameras x 4 temporal frames). It trains on all
+10 dates (~2,991 samples after filtering out clips with incomplete camera coverage — see
+[docs/wds_camera_coverage_investigation.md](./docs/wds_camera_coverage_investigation.md)) and holds out
+`2026-01-07` for validation.
+
+```bash
+cd $YOUR_HOME/alpamayo-recipes/recipes/alpamayo1_5_sft
+bash train_wds_nav_stage1.sh [OUTPUT_DIR]
+```
+
+The script launches training inside a detached `tmux` session (`alpamayo_wds_nav_train` by default) so it
+survives terminal disconnects; re-running the script re-attaches to an already-running session. Set
+`NPROC_PER_NODE`, `EXTRA_ARGS`, `TMUX_SESSION`, or `LOG_FILE` env vars to override defaults.
+
+### Stage 2: trajectory expert on WDS navigation data
+
+[configs/sft_stage2_wds_nav_4cam4frame.yaml](./configs/sft_stage2_wds_nav_4cam4frame.yaml) reuses the same
+`WDSNavDataset` (4 cameras x 4 frames, all 10 dates) but swaps in the Stage-2 expert model
+(`/models/ar1_5_expert`), freezing the Stage-1-tuned VLM and training the trajectory diffusion head, same
+as [sft_stage2_nav.yaml](./configs/sft_stage2_nav.yaml) does for the PAI dataset.
+
+Once the Stage-1 WDS run above has produced a checkpoint, launch Stage 2 with:
+
+```bash
+cd $YOUR_HOME/alpamayo-recipes/recipes/alpamayo1_5_sft
+bash train_wds_nav_stage2.sh /path/to/stage1_output/checkpoint-XXXX [OUTPUT_DIR]
+```
+
+`STAGE1_CHECKPOINT_PATH` is required (a Trainer output dir containing `model.safetensors.index.json` and
+its shards) and is passed through to `model.stage1_vlm_checkpoint_path`. The base pretrained checkpoint
+path is read from `model.pretrained_model_name_or_path` in
+[sft_stage2_wds_nav_4cam4frame.yaml](./configs/sft_stage2_wds_nav_4cam4frame.yaml).
+
 ## Evaluation
 
 Evaluate the Stage-2 checkpoint against `val_dataset`:
