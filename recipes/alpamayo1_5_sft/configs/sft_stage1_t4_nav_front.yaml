@@ -1,0 +1,71 @@
+defaults:
+  - sft_base
+  - /models/ar1_5_base@model
+  - override /vla_processor@data.train_dataset.vla_preprocess_args: nav
+  - override /vla_processor@data.val_dataset.vla_preprocess_args: nav
+  - _self_
+
+# Stage 1 on TIER IV T4 scenes, front camera only.
+#
+# One camera, four frames: CAM_FRONT_WIDE is PAI index 1
+# (camera_front_wide_120fov) and is stored as a JPEG directory on the prd_jt
+# rig, so a sample decodes four images and no video. Measured 201 ms per sample
+# against 1.53 s for the four-camera set, which is what lets eight workers stay
+# ahead of the GPUs without a pre-built image cache.
+#
+# The `nav` processor puts the navigation text in as a `route` component and
+# asks for the trajectory; it does not read `cot`, so this config needs no
+# chain-of-causation labels. Use `nav_coc` once they exist.
+
+data:
+  train_dataset:
+    _target_: alpamayo.data.t4_nav.T4NavDataset
+    _recursive_: false
+    root: ${oc.env:T4_DATASET_ROOT,/mnt/storage_rdma/datasets/tier4/t4_dataset}
+    keyframes: ${oc.env:T4_KEYFRAMES,/mnt/storage_rdma/workspaces/takeuchi/coc-t4-run/full/keyframes/segments_relative_timestamp_sampled.json}
+    nav_labels_root: ${oc.env:T4_NAV_LABELS,/mnt/storage_rdma/workspaces/takeuchi/coc-t4-run/full/nav_labels}
+    scenes: null            # null = every scene the keyframes name
+    cameras: ["CAM_FRONT_WIDE"]
+    num_image_frames: 4     # [t0-0.3s, t0-0.2s, t0-0.1s, t0] at 10 Hz
+    num_history_steps: 16
+    num_future_steps: 64
+    image_size: [960, 620]
+    local_dir: ""           # unused here; satisfies sft_base's mandatory field
+    vla_preprocess_args:
+      generation_mode: false
+
+  val_dataset:
+    _target_: alpamayo.data.t4_nav.T4NavDataset
+    _recursive_: false
+    root: ${oc.env:T4_DATASET_ROOT,/mnt/storage_rdma/datasets/tier4/t4_dataset}
+    keyframes: ${oc.env:T4_KEYFRAMES_VAL,/mnt/storage_rdma/workspaces/takeuchi/alpamayo_assets/keyframes_val/segments_relative_timestamp_sampled.json}
+    nav_labels_root: ${oc.env:T4_NAV_LABELS_VAL,/mnt/storage_rdma/workspaces/takeuchi/alpamayo_assets/nav_labels_val}
+    scenes: null
+    cameras: ["CAM_FRONT_WIDE"]
+    num_image_frames: 4
+    num_history_steps: 16
+    num_future_steps: 64
+    image_size: [960, 620]
+    local_dir: ""
+    vla_preprocess_args:
+      generation_mode: true
+
+trainer:
+  lr_multiplier:
+    vlm.model.visual: 0.1
+  ddp_find_unused_parameters: false
+  gradient_accumulation_steps: 4
+  learning_rate: 1e-5
+  warmup_steps: 500
+  # 48,178 windows against the WebDataset era's 2,991. The 50 epochs that run
+  # used drove its loss to 0.008 on a sixteenth of this data; ten here is
+  # already more gradient steps than that.
+  num_train_epochs: 10
+  dataloader_num_workers: 8
+  dataloader_prefetch_factor: 4
+  dataloader_persistent_workers: true
+paths:
+  output_dir: ${oc.env:ALPAMAYO_OUTPUT_ROOT,/mnt/nvme/alpamayo_outputs}/stage1_t4_nav_front
+evaluate:
+  eval_ckpt: null
+task_name: alpamayo_1_5_sft_stage1_t4_nav_front
