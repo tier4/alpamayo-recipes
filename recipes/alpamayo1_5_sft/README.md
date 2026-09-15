@@ -200,6 +200,43 @@ Note that `trainer.deepspeed` is passed as an absolute path because Hydra may ch
 Because LingoQA was included in training for the released Alpamayo 1.5 model, the loss should remain low and stable.
 ![loss](./loss_A1-5_lingoqa.png)
 
+## Train with DriveLM VQA
+
+This recipe can also train Stage-1 VQA on a local DriveLM-style export such as
+`/mnt/nvme/drivelm_vqa_t4`. The loader reads both `perception_vqa` and
+`driving_context_vqa`, flattens each `frame_*.json` QA entry into one training
+sample, and uses the existing `vqa` processor (`image`, `question`, `answer`).
+VQA checkpoints from this run are Stage-1 VLM checkpoints only; Stage 2 is not
+used because there is no trajectory target. The Hydra config name is
+`--config-name sft_stage1_drivelm_vqa`.
+
+The default train curation is intentionally smaller than the full dataset:
+train scenes are split from val scenes with `seed=42`, then each epoch samples
+50,000 QA pairs balanced across `source x category` buckets. This keeps epochs
+bounded while still changing the subset every epoch through
+`DriveLMEpochSamplerCallback`.
+
+```bash
+cd $YOUR_HOME/alpamayo-recipes/recipes/alpamayo1_5_sft
+CKPT_DIR_A1=/path/to/Alpamayo-1.5-10B-A1-format \
+DRIVELM_VQA_ROOT=/mnt/nvme/drivelm_vqa_t4 \
+bash train_drivelm_vqa_stage1.sh
+```
+
+Useful overrides:
+
+```bash
+# Larger curated epoch
+EXTRA_ARGS="data.train_dataset.epoch_size=100000" bash train_drivelm_vqa_stage1.sh
+
+# Perception-only training
+EXTRA_ARGS="data.train_dataset.sources=[perception_vqa] data.val_dataset.sources=[perception_vqa]" \
+  bash train_drivelm_vqa_stage1.sh
+
+# Fixed subset/index order for debugging
+EXTRA_ARGS="data.train_dataset.sampling_mode=fixed" bash train_drivelm_vqa_stage1.sh
+```
+
 ## Train with WebDataset Navigation
 
 This recipe variant trains navigation-conditioned trajectory prediction using locally stored WebDataset tar archives and pre-generated navigation labels, instead of the PAI dataset. No dataset download step is required — all data is on local storage.

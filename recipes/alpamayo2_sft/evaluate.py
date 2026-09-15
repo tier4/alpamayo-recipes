@@ -48,12 +48,37 @@ from alpamayo2_super.models.alpamayo2_super import Alpamayo2Super  # noqa: E402
 from alpamayo2_super.t4.dataset import T4SFTDataset  # noqa: E402
 
 
-def metrics(pred_xyz: torch.Tensor, gt_future_xyz: torch.Tensor) -> tuple[float, float]:
-    """min ADE and min FDE in metres over the sampled trajectories."""
+#: Horizons reported alongside the full 6.4 s one, in seconds.
+HORIZONS = (0.5, 1.0, 2.0, 3.0, 5.0, 6.4)
+DT = 0.1
+
+
+def metrics(pred_xyz: torch.Tensor, gt_future_xyz: torch.Tensor) -> dict[str, float]:
+    """Displacement error for one window, at every reported horizon.
+
+    Both the mean over the sampled trajectories and the minimum are kept. They
+    answer different questions -- what the model produces on average, and what its
+    best guess of K was worth -- and they only coincide when K is one.
+
+    ADE at t averages the waypoints out to t; FDE at t is the single waypoint
+    there. Distances are in the ego xy plane at t0, as `viz_utils._compute_metrics`
+    defines them.
+    """
     gt = gt_future_xyz.detach().float().cpu().numpy()[0, 0, :, :2]
     pred = pred_xyz.detach().float().cpu().numpy().reshape(-1, gt.shape[0], 3)[:, :, :2]
-    d = np.linalg.norm(pred - gt[None], axis=-1)
-    return float(d.mean(axis=-1).min()), float(d[:, -1].min())
+    d = np.linalg.norm(pred - gt[None], axis=-1)          # [samples, waypoints]
+
+    out: dict[str, float] = {}
+    for t in HORIZONS:
+        i = min(int(round(t / DT)) - 1, d.shape[1] - 1)
+        ade = d[:, : i + 1].mean(axis=-1)                 # per sample
+        fde = d[:, i]
+        key = "" if abs(t - HORIZONS[-1]) < 1e-9 else f"@{t:g}s"
+        out[f"ADE{key}"] = float(ade.mean())
+        out[f"minADE{key}"] = float(ade.min())
+        out[f"FDE{key}"] = float(fde.mean())
+        out[f"minFDE{key}"] = float(fde.min())
+    return out
 
 
 def score(
@@ -74,9 +99,8 @@ def score(
     lands on every rank instead of one, keeping the ranks in step.
     """
     mine = rows[rank::world_size]
-    ade: list[float] = []
-    fde: list[float] = []
-    by_behaviour: dict[str, list[tuple[float, float]]] = collections.defaultdict(list)
+    acc: dict[str, list[float]] = collections.defaultdict(list)
+    by_behaviour: dict[str, list[dict[str, float]]] = collections.defaultdict(list)
     failures = 0
     started = time.perf_counter()
 
@@ -95,21 +119,21 @@ def score(
                     num_traj_samples=samples,
                     diffusion_kwargs={"inference_step": steps}, return_extra=True,
                 )
-            a, f = metrics(pred_xyz, data["ego_future_xyz"])
-            ade.append(a)
-            fde.append(f)
+            m = metrics(pred_xyz, data["ego_future_xyz"])
+            for k, v in m.items():
+                acc[k].append(v)
             if dataset.behaviours is not None:
-                by_behaviour[dataset.behaviours[row][0]].append((a, f))
+                by_behaviour[dataset.behaviours[row][0]].append(m)
         except Exception as error:  # noqa: BLE001 - one bad window is not the run
             failures += 1
             print(f"  [{label}] window {row} failed: {type(error).__name__}: {error}", flush=True)
 
         if rank == 0 and n % 10 == 0:
             elapsed = time.perf_counter() - started
-            print(f"  [{label}] rank0 {n}/{len(mine)}  minADE {np.mean(ade):.3f}  "
-                  f"{elapsed/n:.1f} s/window", flush=True)
+            print(f"  [{label}] rank0 {n}/{len(mine)}  "
+                  f"minADE {np.mean(acc['minADE']):.3f}  {elapsed/n:.1f} s/window", flush=True)
 
-    local = {"ade": ade, "fde": fde, "failures": failures,
+    local = {"acc": {k: list(v) for k, v in acc.items()}, "failures": failures,
              "by_behaviour": {k: list(v) for k, v in by_behaviour.items()}}
     if world_size > 1:
         gathered: list[Any] = [None] * world_size
@@ -117,23 +141,29 @@ def score(
     else:
         gathered = [local]
 
-    ade = [x for part in gathered for x in part["ade"]]
-    fde = [x for part in gathered for x in part["fde"]]
+    pooled: dict[str, list[float]] = collections.defaultdict(list)
+    for part in gathered:
+        for k, v in part["acc"].items():
+            pooled[k].extend(v)
     failures = sum(part["failures"] for part in gathered)
-    merged: dict[str, list[tuple[float, float]]] = collections.defaultdict(list)
+    merged: dict[str, list[dict[str, float]]] = collections.defaultdict(list)
     for part in gathered:
         for k, v in part["by_behaviour"].items():
             merged[k].extend(v)
 
     return {
-        "n": len(ade),
+        "n": len(pooled.get("minADE", [])),
         "failures": failures,
-        "minADE_m": float(np.mean(ade)) if ade else None,
-        "minFDE_m": float(np.mean(fde)) if fde else None,
+        # Kept under their old names so existing readers of this file still work.
+        "minADE_m": float(np.mean(pooled["minADE"])) if pooled.get("minADE") else None,
+        "minFDE_m": float(np.mean(pooled["minFDE"])) if pooled.get("minFDE") else None,
+        "horizons": {k: float(np.mean(v)) for k, v in sorted(pooled.items())},
         "by_behaviour": {
             k: {"n": len(v),
-                "minADE_m": float(np.mean([x[0] for x in v])),
-                "minFDE_m": float(np.mean([x[1] for x in v]))}
+                "minADE_m": float(np.mean([x["minADE"] for x in v])),
+                "minFDE_m": float(np.mean([x["minFDE"] for x in v])),
+                "ADE_m": float(np.mean([x["ADE"] for x in v])),
+                "FDE_m": float(np.mean([x["FDE"] for x in v]))}
             for k, v in sorted(merged.items())
         },
     }

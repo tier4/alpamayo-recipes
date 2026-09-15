@@ -87,7 +87,7 @@ def train(cfg: DictConfig) -> None:
             include_hydra_config=True,
         )
 
-    trainer.train()
+    trainer.train(resume_from_checkpoint=training_args.resume_from_checkpoint)
     if torch.distributed.is_initialized():
         torch.distributed.destroy_process_group()
 

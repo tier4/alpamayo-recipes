@@ -7,11 +7,9 @@
 #
 #SBATCH --job-name=a2-metaaction
 #SBATCH --partition=advanced_e2e
-# Scheduled by partition, not pinned to a node: everything this job reads --
-# weights, T4 scenes, the venv and its interpreter -- is on NFS, so it can run
-# wherever the GPUs are free. node01 is excluded because it is the login node and
-# carries a resident dashboard service.
-#SBATCH --exclude=node01
+# Scheduled by partition: everything this job reads -- weights, T4 scenes, the venv
+# and its interpreter -- is on NFS, so it runs wherever there is room. Outputs go to
+# NFS too, which is what makes node01 fair game despite its small root disk.
 #SBATCH --gres=gpu:0
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=32

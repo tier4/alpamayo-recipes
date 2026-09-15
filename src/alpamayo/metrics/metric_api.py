@@ -216,6 +216,15 @@ class DistanceMetrics(Metric):
             timestep_horizons=timestep_horizons,
             time_step=self.time_step,
         )
+        metric_dict.update(
+            distance_metrics.compute_minfde(
+                pred_xyz,
+                gt_xyz,
+                disable_summary=(num_traj_sets == 1),
+                timestep_horizons=timestep_horizons,
+                time_step=self.time_step,
+            )
+        )
 
         # compute per-sample ADE for later visualization
         sample_ade = distance_metrics.compute_ade(pred_xyz, gt_xyz)
@@ -224,13 +233,13 @@ class DistanceMetrics(Metric):
         # dummy logprob for now
         logprob = torch.zeros_like(pred_xyz[..., 0])
 
-        # compute ADE, select pred_xyz of highest logprob
+        # compute ADE/FDE using pred_xyz of highest logprob
         # logprob: [B, N, K, Tf]
         idx = logprob.sum(dim=-1).argmax(dim=-1)  # [B, N]
         top_xyz = torch.take_along_dim(pred_xyz, idx[..., None, None, None], dim=2)
         ade = distance_metrics.compute_ade(top_xyz, gt_xyz).squeeze(2).mean(-1)  # [B]
-        metric_dict.update({"ade": ade})
-        # shape [B]
+        fde = distance_metrics.compute_fde(top_xyz, gt_xyz).squeeze(2).mean(-1)  # [B]
+        metric_dict.update({"ade": ade, "fde": fde})
         timestep_horizon = int(3.0 / self.time_step)
         if timestep_horizon <= pred_xyz.shape[3]:
             ade_3s = (
@@ -238,7 +247,12 @@ class DistanceMetrics(Metric):
                 .squeeze(2)
                 .mean(-1)
             )
-            metric_dict.update({"ade/by_t=3.0": ade_3s})
+            fde_3s = (
+                distance_metrics.compute_fde(top_xyz, gt_xyz, timestep_horizon=timestep_horizon)
+                .squeeze(2)
+                .mean(-1)
+            )
+            metric_dict.update({"ade/by_t=3.0": ade_3s, "fde/by_t=3.0": fde_3s})
 
         metric_dict.update(
             distance_metrics.compute_grouped_corner_distance(

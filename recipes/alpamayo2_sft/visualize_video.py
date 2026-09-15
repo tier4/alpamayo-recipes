@@ -57,6 +57,18 @@ def frame_range(dataset: T4SFTDataset, row: int, lead_s: float, hz: float) -> li
     return [f for f in range(first, min(center, entry_last) + 1, stride)]
 
 
+def _content_bottom(image: np.ndarray, tolerance: int = 6) -> int:
+    """Row index just past the last row that carries anything but page background.
+
+    Background is read from the frame's own top-left pixel rather than assumed
+    white, so this keeps working if the figure ever gets a different ground.
+    """
+    background = image[0, 0].astype(np.int16)
+    ink = (np.abs(image.astype(np.int16) - background).max(axis=2) > tolerance)
+    rows = np.flatnonzero(ink.any(axis=1))
+    return int(rows[-1]) + 1 if rows.size else image.shape[0]
+
+
 _RENDER_STATE: dict[str, Any] = {}
 
 
@@ -71,6 +83,10 @@ def _render_init(index: str, window_list: str | None, cache_dir: str | None,
 def _render_one(job: tuple) -> str:
     """Draw one frame from its saved predictions."""
     npz_path, png_path, scene_idx, frame, center, scene_dir, label, prompt = job
+    # Reuse a frame already drawn. Only the assembly below the figure -- the crop,
+    # the encode -- changes often; redrawing 300 figures to change how they are
+    # cropped costs ten minutes and produces the same pixels. Delete the PNGs to
+    # force a redraw after changing the figure itself.
     if Path(png_path).exists():
         return png_path
     saved = np.load(npz_path, allow_pickle=False)
@@ -80,7 +96,7 @@ def _render_one(job: tuple) -> str:
         str(saved["base_cot"]), str(saved["tuned_cot"]),
         f"{scene_dir}  @frame {frame}  (keyframe {center} [{label}], "
         f"t{(frame - center) / 10:+.1f} s)",
-        Path(png_path), prompt,
+        Path(png_path), prompt, tight=False,
     )
     return png_path
 
@@ -240,12 +256,23 @@ def main(argv: list[str] | None = None) -> int:
             if not Path(png).exists():
                 continue
             image = media.read_image(png)
-            # matplotlib writes RGBA at whatever size the layout came out; a video
-            # encoder wants three channels and even dimensions on both axes.
+            # matplotlib writes RGBA; a video encoder wants three channels.
             if image.ndim == 3 and image.shape[-1] == 4:
                 image = image[..., :3]
-            height, width = image.shape[:2]
-            images.append(image[: height - height % 2, : width - width % 2])
+            images.append(image)
+        if not images:
+            log(f"no frames rendered for {clip['label']}")
+            continue
+
+        # The chain-of-thought panel is sized for the longest text the layout
+        # allows, and the model writes a sentence or two, so most frames end in a
+        # band of blank page. Crop it -- but to one height for the whole clip,
+        # taken from the frame whose text runs longest, or the encoder rejects the
+        # first frame that differs.
+        bottom = max(_content_bottom(image) for image in images)
+        limit = min(images[0].shape[0], bottom + 24)
+        images = [image[: limit - limit % 2, : image.shape[1] - image.shape[1] % 2]
+                  for image in images]
 
         stem = clip["scene_dir"].replace("/", "__") + f"__{clip['label']}"
         target = (out_arg / f"{stem}.mp4") if many else out_arg

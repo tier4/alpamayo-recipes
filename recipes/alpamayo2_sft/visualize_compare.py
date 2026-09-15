@@ -101,8 +101,14 @@ def _project(traj: np.ndarray, calibration: dict[str, Any], shape: tuple[int, in
 
 def render(data: dict[str, Any], gt: np.ndarray, base: np.ndarray, tuned: np.ndarray,
            base_cot: str, tuned_cot: str, title: str, out_path: Path,
-           prompt: str) -> None:
-    """Write the camera / BEV / CoT figure."""
+           prompt: str, tight: bool = True) -> None:
+    """Write the camera / BEV / CoT figure.
+
+    :param tight: trim the margins to the content. Good for a still; wrong for a
+        video frame, because the trim depends on how long the chain of thought is,
+        so consecutive frames come out different sizes and the encoder refuses the
+        second one.
+    """
     import matplotlib
 
     matplotlib.use("Agg")
@@ -190,7 +196,7 @@ def render(data: dict[str, Any], gt: np.ndarray, base: np.ndarray, tuned: np.nda
         fontsize=12,
     )
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    figure.savefig(out_path, bbox_inches="tight")
+    figure.savefig(out_path, **({"bbox_inches": "tight"} if tight else {}))
     plt.close(figure)
 
 

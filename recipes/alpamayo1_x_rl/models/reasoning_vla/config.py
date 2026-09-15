@@ -140,7 +140,7 @@ class RLWrapperReasoningVLAConfig(ReasoningVLAConfig):
         d.pop("_cached_llm_config", None)
         return d
 
-    def get_text_config(self) -> Any:
+    def get_text_config(self, *args: Any, **kwargs: Any) -> Any:
         """Return the underlying *text* config.
 
         vLLM uses `config.get_text_config()` to populate `hf_text_config` and
@@ -151,5 +151,5 @@ class RLWrapperReasoningVLAConfig(ReasoningVLAConfig):
         # Many multimodal configs (e.g., Qwen3-VL) expose a `get_text_config()`
         # that returns the nested text config (with hidden_size, heads, ...).
         if hasattr(llm_cfg, "get_text_config"):
-            return llm_cfg.get_text_config()
+            return llm_cfg.get_text_config(*args, **kwargs)
         return llm_cfg

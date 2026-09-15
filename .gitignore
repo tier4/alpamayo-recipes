@@ -11,3 +11,6 @@ output_stage*
 .env
 *.png
 recipes/alpamayo1_5_sft/docs/
+
+# Per-developer Claude Code settings
+.claude/settings.local.json

@@ -95,6 +95,68 @@ def compute_minade(
     return summarize_metric(out, disable_summary)
 
 
+def compute_fde(
+    pred_xyz: torch.Tensor,
+    gt_xyz: torch.Tensor,
+    timestep_horizon: int | None = None,
+    only_xy: bool = True,
+) -> torch.Tensor:
+    """Compute final displacement error over K samples.
+
+    Args:
+        pred_xyz (torch.Tensor): [B, N, K, T, 3]
+        gt_xyz (torch.Tensor): [B, T, 3]
+        timestep_horizon (int | None): if set, use this as the final timestep index.
+        only_xy (bool): if True, only compute over the BEV (XY) plane.
+
+    Returns:
+        fde: [B, N, K]
+    """
+    diff = pred_xyz - gt_xyz[:, None, None, :, :]  # [B, N, K, T, 3]
+    if only_xy:
+        diff = diff[..., :2]
+    l2 = torch.linalg.norm(diff, ord=2, dim=-1)  # [B, N, K, T]
+    t = timestep_horizon - 1 if timestep_horizon is not None else -1
+    return l2[..., t]  # [B, N, K]
+
+
+def compute_minfde(
+    pred_xyz: torch.Tensor,
+    gt_xyz: torch.Tensor,
+    disable_summary: bool = False,
+    timestep_horizons: Iterable[int] = [5, 10, 30, 50],
+    only_xy: bool = True,
+    time_step: float = 0.1,
+) -> dict[str, torch.Tensor]:
+    """Compute min_fde over K samples.
+
+    Args:
+        pred_xyz (torch.Tensor): [B, N, K, T, 3]
+        gt_xyz (torch.Tensor): [B, T, 3]
+        disable_summary (bool): if True, return min_fde without summarizing over groups.
+        timestep_horizons (Iterable[int]): time horizons in timesteps.
+        only_xy (bool): if True, only compute over the BEV (XY) plane.
+        time_step (float): time step of the trajectory.
+
+    Returns:
+        dict[str, torch.Tensor]:
+            min_fde: [B]
+            min_fde/by_t=X: [B] for each horizon
+    """
+    _, N, _, T, _ = pred_xyz.shape
+    valid_horizons = [t for t in timestep_horizons if t <= T]
+
+    diff = pred_xyz - gt_xyz[:, None, None, :, :]  # [B, N, K, T, 3]
+    if only_xy:
+        diff = diff[..., :2]
+    l2 = torch.linalg.norm(diff, ord=2, dim=-1)  # [B, N, K, T]
+
+    out = {"min_fde": l2[..., -1].min(dim=2)[0]}  # [B, N]
+    for t in valid_horizons:
+        out[f"min_fde/by_t={t * time_step:.1f}"] = l2[..., t - 1].min(dim=2)[0]
+    return summarize_metric(out, disable_summary)
+
+
 def compute_grouped_corner_distance(
     pred_xyz: torch.Tensor,
     pred_rot: torch.Tensor,

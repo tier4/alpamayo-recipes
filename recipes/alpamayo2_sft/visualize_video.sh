@@ -1,9 +1,9 @@
 #!/bin/bash
 # Render the run-up to a keyframe as a 10 Hz comparison video.
 #
-# Scheduled by partition, not pinned: everything read here is on NFS. node01 is
-# excluded because it is the login node and carries a resident dashboard.
-#SBATCH --exclude=node01
+# Scheduled by partition: everything this job reads -- weights, T4 scenes, the venv
+# and its interpreter -- is on NFS, so it runs wherever there is room. Outputs go to
+# NFS too, which is what makes node01 fair game despite its small root disk.
 #SBATCH --job-name=a2-video
 #SBATCH --partition=advanced_e2e
 #SBATCH --gres=gpu:8

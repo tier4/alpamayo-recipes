@@ -41,12 +41,20 @@ def _defaults_include_override(config: dict, key: str, value: str) -> bool:
 
 def test_recipe_structured_files_parse() -> None:
     """Every recipe config file should be syntactically parseable."""
-    structured_files = [
+    structured_files = sorted({
         *RECIPES_DIR.glob("*/*.toml"),
         *RECIPES_DIR.glob("*/*.lock"),
         *RECIPES_DIR.glob("*/*/**/*.toml"),
         *RECIPES_DIR.glob("*/*/**/*.yaml"),
         *RECIPES_DIR.glob("*/*/**/*.json"),
+    })
+    structured_files = [
+        path
+        for path in structured_files
+        if not any(
+            part.startswith(".venv") or part in {"outputs", "site-packages"}
+            for part in path.parts
+        )
     ]
     assert structured_files
 
@@ -110,6 +118,7 @@ def test_alpamayo1_5_sft_configs_preserve_nav_and_lingoqa_contracts() -> None:
     nav_stage1 = _load_yaml(recipe_dir / "configs" / "sft_stage1_nav.yaml")
     nav_stage2 = _load_yaml(recipe_dir / "configs" / "sft_stage2_nav.yaml")
     lingoqa_stage1 = _load_yaml(recipe_dir / "configs" / "sft_stage1_lingoqa.yaml")
+    drivelm_stage1 = _load_yaml(recipe_dir / "configs" / "sft_stage1_drivelm_vqa.yaml")
     processors = {
         path.stem: _load_yaml(path)
         for path in sorted((recipe_dir / "configs" / "vla_processor").glob("*.yaml"))
@@ -125,6 +134,8 @@ def test_alpamayo1_5_sft_configs_preserve_nav_and_lingoqa_contracts() -> None:
             "--config-name sft_stage1_nav",
             "--config-name sft_stage2_nav",
             "--config-name sft_stage1_lingoqa",
+            "--config-name sft_stage1_drivelm_vqa",
+            "train_drivelm_vqa_stage1.sh",
             "[vla_processor](./configs/vla_processor/)",
             "`nav`",
             "`vqa`",
@@ -135,6 +146,7 @@ def test_alpamayo1_5_sft_configs_preserve_nav_and_lingoqa_contracts() -> None:
     assert "/models/ar1_5_base@model" in nav_stage1["defaults"]
     assert "/models/ar1_5_expert@model" in nav_stage2["defaults"]
     assert "/models/ar1_5_base@model" in lingoqa_stage1["defaults"]
+    assert "/models/ar1_5_base@model" in drivelm_stage1["defaults"]
 
     for config in (nav_stage1, nav_stage2):
         assert config["data"]["train_dataset"]["_target_"] == "alpamayo.data.pai_nav.PAIDatasetWithNav"
@@ -161,6 +173,32 @@ def test_alpamayo1_5_sft_configs_preserve_nav_and_lingoqa_contracts() -> None:
     )
     assert _defaults_include_override(
         lingoqa_stage1,
+        "override /vla_processor@data.val_dataset.vla_preprocess_args",
+        "vqa",
+    )
+    assert drivelm_stage1["data"]["train_dataset"]["_target_"] == (
+        "alpamayo.data.drivelm_vqa.DriveLMVQADataset"
+    )
+    assert drivelm_stage1["data"]["val_dataset"]["_target_"] == (
+        "alpamayo.data.drivelm_vqa.DriveLMVQADataset"
+    )
+    assert drivelm_stage1["data"]["train_dataset"]["sampling_mode"] == "balanced_epoch"
+    assert drivelm_stage1["data"]["train_dataset"]["epoch_size"] == 50000
+    assert drivelm_stage1["data"]["val_dataset"]["sampling_mode"] == "fixed"
+    assert drivelm_stage1["trainer"]["max_steps"] == -1
+    assert drivelm_stage1["trainer"]["save_strategy"] == "steps"
+    assert drivelm_stage1["data"]["train_dataset"]["vla_preprocess_args"]["generation_mode"] is False
+    assert drivelm_stage1["data"]["val_dataset"]["vla_preprocess_args"]["generation_mode"] is True
+    assert drivelm_stage1["callbacks"]["drivelm_epoch_sampler"]["_target_"] == (
+        "alpamayo1_5_sft.callbacks.DriveLMEpochSamplerCallback"
+    )
+    assert _defaults_include_override(
+        drivelm_stage1,
+        "override /vla_processor@data.train_dataset.vla_preprocess_args",
+        "vqa",
+    )
+    assert _defaults_include_override(
+        drivelm_stage1,
         "override /vla_processor@data.val_dataset.vla_preprocess_args",
         "vqa",
     )
@@ -206,14 +244,16 @@ def test_alpamayo1_x_rl_toml_configs_preserve_local_launch_contract() -> None:
     assert reasoning["custom"]["alpamayo"]["reasoning_grading_device"] == "auto"
     assert reasoning["custom"]["alpamayo"]["reasoning_grading_model_path"]
 
-
 def test_alpamayo1_x_rl_hydra_configs_preserve_dataset_contract() -> None:
     recipe_dir = RECIPES_DIR / "alpamayo1_x_rl"
     hydra_configs = {
         path.stem: _load_yaml(path)
         for path in sorted((recipe_dir / "hydra_configs").glob("*.yaml"))
     }
-    assert set(hydra_configs) == {"alpamayo1_5_rvla_rl_pai", "alpamayo1_rvla_rl_pai"}
+    assert set(hydra_configs) == {
+        "alpamayo1_5_rvla_rl_pai",
+        "alpamayo1_rvla_rl_pai",
+    }
 
     for name, config in hydra_configs.items():
         dataset = config["data"]["train"]["dataset"]
@@ -242,7 +282,6 @@ def test_alpamayo1_x_rl_hydra_configs_preserve_dataset_contract() -> None:
     assert hydra_configs["alpamayo1_5_rvla_rl_pai"]["data"]["train"]["dataset"]["vla_preprocess_args"][
         "include_frame_nums"
     ] is True
-
 
 def test_alpamayo1_x_rl_entrypoints_preserve_reward_and_dataset_wiring() -> None:
     recipe_dir = RECIPES_DIR / "alpamayo1_x_rl"

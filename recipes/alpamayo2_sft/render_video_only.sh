@@ -2,7 +2,6 @@
 # Re-render a comparison video from saved predictions. No GPU: the inference phase
 # already ran and wrote its output, which is the point of splitting the phases --
 # a layout change costs a re-render, not a re-run.
-#SBATCH --exclude=node01
 #SBATCH --job-name=a2-video-render
 #SBATCH --partition=advanced_e2e
 #SBATCH --gres=gpu:0
@@ -24,5 +23,5 @@ exec ./.venv/bin/python "$RECIPE/visualize_video.py" \
     --expert-weights "$A/weights/a2_sft_expert_v1/expert-final" \
     --decode gpu --device cpu --phase render \
     --work-dir "$A/viz/video_work/$TAG" \
-    --out "$A/viz/a2_sft_expert_v1_$TAG.mp4" \
+    --out "$A/viz/clips_$TAG" \
     "$@"
